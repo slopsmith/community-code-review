@@ -3,6 +3,12 @@ FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama
 
 FROM python:3.14-alpine
 
+LABEL org.opencontainers.image.title="Community Code Review Volunteer"
+LABEL org.opencontainers.image.description="Run this container to donate GPU compute for automated AI code reviews on GitHub pull requests. See VOLUNTEER_SETUP.md in the repository for setup instructions."
+LABEL org.opencontainers.image.documentation="https://github.com/slopsmith/community-code-review/blob/main/docs/VOLUNTEER_SETUP.md"
+LABEL org.opencontainers.image.source="https://github.com/slopsmith/community-code-review"
+LABEL org.opencontainers.image.licenses="MIT"
+
 # Copy llama-server from the official image
 COPY --from=llama /app/llama-server /usr/local/bin/llama-server
 

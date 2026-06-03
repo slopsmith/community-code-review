@@ -1,5 +1,10 @@
 FROM python:3.14-alpine
 
+LABEL org.opencontainers.image.title="Community Code Review Coordinator"
+LABEL org.opencontainers.image.description="Central relay server for community-powered AI code reviews. Receives requests from GitHub Actions, distributes inference to volunteer containers."
+LABEL org.opencontainers.image.source="https://github.com/slopsmith/community-code-review"
+LABEL org.opencontainers.image.licenses="MIT"
+
 WORKDIR /app
 
 COPY requirements.txt .
