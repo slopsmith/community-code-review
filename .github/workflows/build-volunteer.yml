@@ -32,3 +32,4 @@ jobs:
           context: volunteer
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/volunteer:latest
+          build-args: ORG_NAME=${{ github.repository_owner }}
