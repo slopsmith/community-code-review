@@ -164,7 +164,7 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     echo "🧪 Starting test volunteer..."
     # Remove any previous container with this name
     docker rm smoke-test-volunteer 2>/dev/null || true
-    docker run -d \
+    MSYS_NO_PATHCONV=1 docker run -d \
         --name smoke-test-volunteer \
         --gpus all \
         --add-host host.docker.internal:host-gateway \
@@ -226,7 +226,7 @@ echo "  ✅ Setup complete. The coordinator is ready!"
 echo ""
 echo "  Tell volunteers to run this command:"
 echo ""
-echo "    docker run -d --gpus all \ "
+echo "    MSYS_NO_PATHCONV=1 docker run -d --gpus all \ "
 echo "      --name code-review-volunteer \ "
 echo "      -v ~/code-review-models:/models \ "
 echo "      -e COORDINATOR_URL=\"${FUNNEL_URL}\" \ "

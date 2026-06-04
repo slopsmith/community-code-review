@@ -148,7 +148,7 @@ The coordinator requires authentication, so you must set this — the coordinato
 If the coordinator asks you to use a different model, make sure Git for Windows is installed, open a Bash terminal, and run:
 
 ```bash
-docker run -d \
+MSYS_NO_PATHCONV=1 docker run -d \
   --name code-review-volunteer \
   --gpus all \
   -v /c/Users/YourName/code-review-models:/models \
