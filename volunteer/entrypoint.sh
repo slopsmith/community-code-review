@@ -40,7 +40,7 @@ while true; do
     echo "=== Container start ==="
     GPU_INFO="CPU (no GPU detected)"
     if command -v nvidia-smi &>/dev/null; then
-        local smi=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
+        smi=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
         [ -n "$smi" ] && GPU_INFO="$smi"
     fi
     case "${GPU_DEVICES:-}" in
@@ -54,7 +54,7 @@ while true; do
     check_vram || true
 
     if [ ! -f "$MODEL_PATH" ]; then
-        local dl="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
+        dl="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
         echo "  Downloading model..."
         curl -# -L "$dl" -o "${MODEL_PATH}.tmp" 2>&1
         mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
@@ -66,7 +66,7 @@ while true; do
     echo "  Starting llama-server..."
     /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" -ngl "$LLAMA_N_GPU_LAYERS" -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
     LLAMA_PID=$!
-    local ok=0
+    ok=0
     for i in $(seq 1 30); do
         if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
         sleep 1
