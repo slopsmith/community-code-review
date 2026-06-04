@@ -180,9 +180,9 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     echo "  You can follow progress with: docker logs -f smoke-test-volunteer"
     echo ""
 
-    # Poll for registration up to 5 minutes, abort if container fails
+    # Poll for registration up to 20 minutes, abort if container fails
     REGISTERED=false
-    for i in $(seq 1 60); do
+    for i in $(seq 1 240); do
         # Check container is still running
         CONTAINER_STATUS=$(docker inspect smoke-test-volunteer --format '{{.State.Status}}' 2>/dev/null || true)
         if [ "$CONTAINER_STATUS" != "running" ]; then
@@ -210,7 +210,7 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
             echo "  Test volunteer stopped and removed."
         fi
     else
-        echo "⚠ Smoke test inconclusive — volunteer did not register within 5 minutes."
+        echo "⚠ Smoke test inconclusive — volunteer did not register within 20 minutes."
         echo "  The model download may still be in progress."
         echo "  Check logs: docker logs -f smoke-test-volunteer"
         echo ""
