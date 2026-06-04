@@ -1,0 +1,18 @@
+# Shell scripts must have LF line endings for Alpine/Unix compatibility
+*.sh text eol=lf
+
+# Python files
+*.py text eol=lf
+
+# Dockerfiles
+Dockerfile text eol=lf
+
+# YAML
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# Everything else auto-detect
+* text=auto
