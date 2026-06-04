@@ -162,6 +162,8 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     cd - > /dev/null
 
     echo "🧪 Starting test volunteer..."
+    # Remove any previous container with this name
+    docker rm -f smoke-test-volunteer 2>/dev/null || true
     docker run -d \
         --name smoke-test-volunteer \
         --gpus all \
