@@ -32,8 +32,9 @@ if ! command -v tailscale &>/dev/null; then
 fi
 
 # Check Tailscale is logged in and connected
-TAILSCALE_STATUS=$(tailscale status --json 2>/dev/null || echo '{"Self":null}')
-if ! echo "$TAILSCALE_STATUS" | grep -q '"Online":true'; then
+TAILSCALE_STATUS=$(tailscale status --json 2>/dev/null || echo '{"Self":null,"Status":"NoState"}')
+# Check for "Online" being true anywhere in the output (handles any JSON spacing)
+if ! echo "$TAILSCALE_STATUS" | grep -q '"Online"[[:space:]]*:'; then
     echo "  ⚠ Tailscale is installed but may not be logged in or connected."
     echo "  Please run: tailscale up"
     echo "  Then re-run this script."
@@ -42,60 +43,103 @@ fi
 echo "  ✓ Tailscale (connected)"
 echo ""
 
-# ── Step 2: Generate volunteer secret ─────────────────────────────────---
-echo "🔐 Generating volunteer secret..."
-COORDINATOR_SECRET=$(openssl rand -base64 32)
-echo "  ✓ Secret generated"
-echo ""
+# ── Check if already configured ──────────────────────────────────────────
+if [ -f .env ]; then
+    echo "📂 Existing .env found — loading previous configuration..."
+    set -a
+    . .env
+    set +a
+    echo "  ✓ Loaded configuration"
+    echo ""
+    echo "🔁 Re-running setup — existing configuration preserved."
+    echo "  To start fresh, remove the .env file and re-run."
+    echo ""
+fi
 
-# ── Step 3: Gather inputs ────────────────────────────────────────────────
-echo "Please enter your GitHub organization name:"
-read -r GITHUB_ORG_NAME
-echo "Please enter your GitHub Personal Access Token (with admin:org scope):"
-read -rs GITHUB_PAT
-echo ""
+# ── Step 2: Generate volunteer secret (only if not already set) ──────────
+if [ -z "$COORDINATOR_SECRET" ]; then
+    echo "🔐 Generating volunteer secret..."
+    COORDINATOR_SECRET=$(openssl rand -base64 32)
+    echo "  ✓ Secret generated"
+    echo ""
+fi
 
-# ── Step 4: Create .env file ─────────────────────────────────────────────
-echo "📝 Creating .env file..."
-cat > .env << EOF
+# ── Step 3: Gather inputs (only if not already configured) ────────────────
+if [ -z "$GITHUB_ORG_NAME" ]; then
+    echo "Please enter your GitHub organization name:"
+    read -r GITHUB_ORG_NAME
+    echo ""
+    echo "Now you need a GitHub Personal Access Token with admin:org scope."
+    echo "  Create one at:"
+    echo "    https://github.com/settings/tokens/new?description=self-hosted-runner&scopes=admin:org"
+    echo ""
+    echo "  Click \"Generate token\" and paste it below:"
+    read -rs GITHUB_PAT
+    echo ""
+fi
+
+# ── Step 4: Create .env file (only if missing) ───────────────────────────
+if [ ! -f .env ]; then
+    echo "📝 Creating .env file..."
+    cat > .env << EOF
 COORDINATOR_SECRET=${COORDINATOR_SECRET}
 GITHUB_ORG_NAME=${GITHUB_ORG_NAME}
 GITHUB_PAT=${GITHUB_PAT}
 RUNNER_NAME=coordinator-runner
 EOF
-echo "  ✓ .env created"
+    echo "  ✓ .env created"
+else
+    echo "📝 .env file already exists — skipping (use teardown.sh to reset)"
+fi
 echo ""
 
-# ── Step 5: Start Docker containers ──────────────────────────────────────
-echo "🐳 Starting coordinator and runner..."
-docker compose up -d
-echo "  ✓ Containers started"
+# ── Step 5: Start Docker containers (skip if already running) ────────────
+RUNNING=$(docker compose ps --status running 2>/dev/null | grep -c "Up" || true)
+if [ "$RUNNING" -ge 2 ]; then
+    echo "🐳 Coordinator and runner are already running — skipping"
+else
+    echo "🐳 Starting coordinator and runner..."
+    docker compose up -d
+    echo "  ✓ Containers started"
+    echo ""
+    echo "⏳ Waiting for runner to register with GitHub..."
+    sleep 5
+    echo "    https://github.com/organizations/${GITHUB_ORG_NAME}/settings/actions/runners"
+    echo "  for 'coordinator-runner' (status: Idle)"
+fi
 echo ""
 
-# Wait for runner to appear
-echo "⏳ Waiting for runner to register with GitHub..."
-sleep 5
-RUNNER_IDLE=$(docker compose ps --status running runner 2>/dev/null | grep -c "runner" || true)
-echo "  Check GitHub → Your Organization → Settings → Actions → Runners"
-echo "  for 'coordinator-runner' (status: Idle)"
-echo ""
+# ── Step 6: Tailscale Funnel setup (skip if already active) ──────────────
+FUNNEL_ACTIVE=$(tailscale funnel status 2>/dev/null | grep -c "8080" || true)
+if [ "$FUNNEL_ACTIVE" -gt 0 ]; then
+    echo "🌐 Tailscale Funnel already active on port 8080 — skipping"
+    FUNNEL_URL=$(tailscale funnel status 2>/dev/null | grep -o 'https://[^ ]*' | head -1 || true)
+else
+    echo "🌐 Setting up Tailscale Funnel..."
+    echo ""
+    echo "  First, enable MagicDNS and HTTPS Certificates in your Tailscale admin console:"
+    echo "    1. Go to https://login.tailscale.com/admin/dns"
+    echo "    2. Enable MagicDNS (if not already on)"
+    echo "    3. Enable HTTPS Certificates (if not already on)"
+    echo ""
+    echo "  Press Enter once you've done both..."
+    read -r
+    echo ""
 
-# ── Step 6: Tailscale Funnel setup ───────────────────────────────────────
-echo "🌐 Setting up Tailscale Funnel..."
-echo ""
-echo "  First, enable MagicDNS and HTTPS Certificates in your Tailscale admin console:"
-echo "    1. Go to https://login.tailscale.com/admin/dns"
-echo "    2. Enable MagicDNS (if not already on)"
-echo "    3. Enable HTTPS Certificates (if not already on)"
-echo ""
-echo "  Press Enter once you've done both..."
-read -r
+    # Run funnel — --yes skips interactive prompts, --bg runs in background
+    echo "→ Enabling Funnel on port 8080..."
+    tailscale funnel --yes --bg 8080 2>&1 || sudo tailscale funnel --yes --bg 8080 2>&1 || true
+    echo ""
 
-# Get the Funnel URL
-# `tailscale funnel` may need sudo on Linux; on Windows Git Bash it doesn't
-FUNNEL_OUTPUT=$(tailscale funnel 8080 2>&1) || FUNNEL_OUTPUT=$(sudo tailscale funnel 8080 2>&1) || true
-echo "$FUNNEL_OUTPUT"
-FUNNEL_URL=$(echo "$FUNNEL_OUTPUT" | grep -o 'https://[^ ]*' | head -1 || true)
+    # Get the URL after funnel is authorized
+    FUNNEL_URL=$(tailscale funnel status 2>&1 | grep -o 'https://[^ ]*' | head -1 || true)
+    if [ -n "$FUNNEL_URL" ]; then
+        echo "  ✓ Funnel is active at ${FUNNEL_URL}"
+    else
+        echo "  ⚠ Funnel may still be provisioning. Continuing..."
+    fi
+fi
+
 if [ -z "$FUNNEL_URL" ]; then
     FUNNEL_URL="https://<your-machine>.<your-tailnet>.ts.net"
 fi
@@ -134,9 +178,16 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     echo "  You can follow progress with: docker logs -f smoke-test-volunteer"
     echo ""
 
-    # Poll for registration up to 5 minutes
+    # Poll for registration up to 5 minutes, abort if container fails
     REGISTERED=false
     for i in $(seq 1 60); do
+        # Check container is still running
+        CONTAINER_STATUS=$(docker inspect smoke-test-volunteer --format '{{.State.Status}}' 2>/dev/null || true)
+        if [ "$CONTAINER_STATUS" != "running" ]; then
+            echo "  ✗ Container stopped ($CONTAINER_STATUS) — check logs above for errors"
+            break
+        fi
+
         VOLUNTEERS=$(curl -sf http://localhost:8080/volunteers 2>/dev/null || echo "[]")
         if echo "$VOLUNTEERS" | grep -q '"smoke-test"'; then
             REGISTERED=true
