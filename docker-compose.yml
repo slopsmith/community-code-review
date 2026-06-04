@@ -14,6 +14,7 @@ services:
     # https://github.com/myoung34/docker-github-actions-runner
     image: myoung34/github-runner:latest
     environment:
+      RUNNER_SCOPE: "org"
       ORG_NAME: "${GITHUB_ORG_NAME}"
       ACCESS_TOKEN: "${GITHUB_PAT}"
       RUNNER_NAME: "${RUNNER_NAME:-coordinator-runner}"
