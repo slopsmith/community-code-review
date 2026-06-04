@@ -10,7 +10,7 @@ LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
 LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
 LLAMA_TEMP="${LLAMA_TEMP:-0.7}"
 MODEL_PATH="/models/${MODEL_FILE}"
-LLAMA_N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-99}"
+LLAMA_N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-}"
 
 check_vram() {
     local info=$(curl -sf "https://huggingface.co/api/models/${MODEL_REPO}" 2>/dev/null) || return 0
@@ -29,7 +29,8 @@ print(0)
     echo "  Model: ~${model_mb}MiB, VRAM: ${vram_total}MiB total"
     if [ "$vram_total" -gt 0 ] && [ "$model_mb" -gt "$vram_total" ]; then
         # Scale layers proportionally — model layers / VRAM ratio
-        local scaled=$(( LLAMA_N_GPU_LAYERS * vram_total / model_mb ))
+        local layers=${LLAMA_N_GPU_LAYERS:-99}
+        local scaled=$(( layers * vram_total / model_mb ))
         [ "$scaled" -lt 1 ] && scaled=1   # always use GPU for at least 1 layer
         LLAMA_N_GPU_LAYERS=$scaled
         echo "  Partial offload: ${LLAMA_N_GPU_LAYERS} GPU layers (auto-scaled)"
@@ -64,7 +65,9 @@ while true; do
     fi
 
     echo "  Starting llama-server..."
-    /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" -ngl "$LLAMA_N_GPU_LAYERS" -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
+    ngl_arg=""
+    [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"
+    /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
     LLAMA_PID=$!
     ok=0
     for i in $(seq 1 30); do
