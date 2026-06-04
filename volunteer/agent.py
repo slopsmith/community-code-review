@@ -6,6 +6,8 @@ receives inference requests, sends them to the local llama-server via HTTP,
 and returns results. This agent runs alongside llama-server in the container.
 
 Every connection is outbound-initiated — works behind NAT, CGNAT, firewalls.
+
+ZZ Woz 'ere (aka-testing functionality) 
 """
 
 import asyncio
