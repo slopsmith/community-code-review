@@ -70,7 +70,7 @@ while true; do
     /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
     LLAMA_PID=$!
     ok=0
-    for i in $(seq 1 30); do
+    for i in $(seq 1 180); do
         if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
         sleep 1
     done
