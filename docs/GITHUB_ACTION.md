@@ -1,10 +1,11 @@
-# GitHub Actions Setup
+# GitHub Action Setup
 
 ## Overview
 
-Add this workflow to **each repository** in your organization that should get automated code reviews.
+We need to add a GitHub Actions workflow to **each repository** in your organization that should get automated code reviews.
 
 The workflow:
+
 1. Triggers on PRs (opened, synchronized, reopened)
 2. Checks out code with full git history
 3. Installs `ocr` (Alibaba OpenCodeReview)
@@ -26,15 +27,3 @@ That's it. The workflow hardcodes the coordinator URL (`http://coordinator:8080`
 The source workflow file is at [`workflows/ocr-review.yml`](../workflows/ocr-review.yml) in this repository — that's the canonical version. It's deployed to target repos via the **Deploy OCR to Repositories** workflow (see [Leader Setup](LEADER_SETUP.md)).
 
 It triggers on PRs (opened, synchronized, reopened) and on comments containing `/open-code-review` or `@open-code-review`.
-
-```yaml
-- name: Run OpenCodeReview
-  run: |
-    ocr review \
-      --concurrency 3 \
-      --from "origin/${{ github.base_ref }}" \
-      --to "origin/${{ github.head_ref }}" \
-      --format json \
-      --audience agent \
-      > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
-```
