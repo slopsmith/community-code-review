@@ -176,13 +176,18 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
         -e MODEL_FILE="Qwen3-30B-A3B-Q4_K_M.gguf" \
         volunteer:latest
 
-    echo "⏳ Waiting for model download and registration (this may take a while)..."
+    echo "⏳ Waiting for volunteer to register..."
     echo "  You can follow progress with: docker logs -f smoke-test-volunteer"
     echo ""
 
-    # Poll for registration up to 20 minutes, abort if container fails
+    # Poll for registration, abort if container fails
+    if [ -n "$MOCK_MODE" ]; then
+        POLL_MAX=24   # 2 minutes for quick test
+    else
+        POLL_MAX=240  # 20 minutes for full test
+    fi
     REGISTERED=false
-    for i in $(seq 1 240); do
+    for i in $(seq 1 $POLL_MAX); do
         # Check container is still running
         CONTAINER_STATUS=$(docker inspect smoke-test-volunteer --format '{{.State.Status}}' 2>/dev/null || true)
         if [ "$CONTAINER_STATUS" != "running" ]; then
