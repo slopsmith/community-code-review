@@ -147,12 +147,26 @@ fi
 # ── Step 7: Optional smoke test ──────────────────────────────────────────
 echo ""
 echo "🧪 Run a quick smoke test?"
-echo "  This builds the volunteer image and starts a test container on"
-echo "  this machine to verify the coordinator can see it."
-echo "  You'll need a GPU for this (or it will fall back to CPU)."
+echo "  This verifies the volunteer can connect to the coordinator."
+echo "  You'll need a GPU for the full test (or it will fall back to CPU)."
 echo ""
-echo "  Run smoke test? [y/N]"
+echo "  Options:"
+echo "    [q] Quick test  — skips model load, tests connection only (~10s)"
+echo "    [f] Full test   — downloads model and tests full pipeline (~20+ min)"
+echo "    [N] Skip        — no smoke test"
+echo ""
+echo "  Run which test? [q/f/N]"
 read -r SMOKE_TEST
+
+MOCK_MODE=""
+if [ "$SMOKE_TEST" = "q" ] || [ "$SMOKE_TEST" = "Q" ]; then
+    MOCK_MODE="1"
+    SMOKE_TEST="y"
+elif [ "$SMOKE_TEST" = "f" ] || [ "$SMOKE_TEST" = "F" ]; then
+    SMOKE_TEST="y"
+else
+    SMOKE_TEST="n"
+fi
 
 if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     echo ""
@@ -172,6 +186,7 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
         -e COORDINATOR_URL="http://host.docker.internal:8080" \
         -e VOLUNTEER_ID="smoke-test" \
         -e VOLUNTEER_SECRET="${COORDINATOR_SECRET}" \
+        -e MOCK_MODE="${MOCK_MODE}" \
         -e MODEL_REPO="Qwen/Qwen3-30B-A3B-GGUF" \
         -e MODEL_FILE="Qwen3-30B-A3B-Q4_K_M.gguf" \
         volunteer:latest
@@ -204,7 +219,11 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     done
 
     if [ "$REGISTERED" = true ]; then
-        echo "✅ Smoke test passed! Coordinator sees the volunteer."
+        if [ -n "$MOCK_MODE" ]; then
+            echo "✅ Quick test passed! Coordinator sees the volunteer (mock mode)."
+        else
+            echo "✅ Smoke test passed! Coordinator sees the volunteer."
+        fi
         echo "  You can leave it running while you test PRs, or stop it now."
         echo ""
         echo "  Keep it running? [y/N]"
@@ -215,8 +234,12 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
             echo "  Test volunteer stopped and removed."
         fi
     else
+    if [ -n "$MOCK_MODE" ]; then
+        echo "⚠ Quick test inconclusive — volunteer did not register within 2 minutes."
+    else
         echo "⚠ Smoke test inconclusive — volunteer did not register within 20 minutes."
         echo "  The model download may still be in progress."
+    fi
         echo "  Check logs: docker logs -f smoke-test-volunteer"
         echo ""
         echo "  To clean up the test container:"

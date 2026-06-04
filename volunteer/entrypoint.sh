@@ -54,27 +54,69 @@ while true; do
     echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
     check_vram || true
 
-    if [ ! -f "$MODEL_PATH" ]; then
-        dl="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
-        echo "  Downloading model..."
-        curl -# -L "$dl" -o "${MODEL_PATH}.tmp" 2>&1
-        mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
-        echo "  Download complete"
-    else
-        echo "  Model found: $MODEL_PATH"
-    fi
+    if [ "${MOCK_MODE:-}" = "1" ]; then
+        echo "  MOCK MODE: skipping model load, starting dummy server..."
+        python3 -c "
+import http.server, socketserver, json, threading
 
-    echo "  Starting llama-server..."
-    ngl_arg=""
-    [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"
-    /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
-    LLAMA_PID=$!
-    ok=0
-    for i in $(seq 1 180); do
-        if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
-        sleep 1
-    done
-    if [ "$ok" -eq 0 ]; then echo "  Server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def do_POST(self):
+        if self.path == '/v1/chat/completions':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'choices': [{'message': {'content': '**MOCK REVIEW** This is a test response from the volunteer smoke test.'}}]
+            }).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def log_message(self, format, *args):
+        pass
+
+httpd = socketserver.TCPServer(('0.0.0.0', ${LLAMA_PORT}), Handler)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+import time
+time.sleep(999999)
+" &
+        LLAMA_PID=$!
+        ok=0
+        for i in $(seq 1 30); do
+            if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+        done
+        if [ "$ok" -eq 0 ]; then echo "  Mock server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
+    else
+        if [ ! -f "$MODEL_PATH" ]; then
+            dl="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
+            echo "  Downloading model..."
+            curl -# -L "$dl" -o "${MODEL_PATH}.tmp" 2>&1
+            mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
+            echo "  Download complete"
+        else
+            echo "  Model found: $MODEL_PATH"
+        fi
+
+        echo "  Starting llama-server..."
+        ngl_arg=""
+        [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"
+        /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
+        LLAMA_PID=$!
+        ok=0
+        for i in $(seq 1 600); do
+            if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+        done
+        if [ "$ok" -eq 0 ]; then echo "  Server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
+    fi
 
     echo "  Starting agent..."
     cd /app && python3 agent.py &
