@@ -163,12 +163,12 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
 
     echo "🧪 Starting test volunteer..."
     # Remove any previous container with this name
-    docker rm -f smoke-test-volunteer 2>/dev/null || true
+    docker rm smoke-test-volunteer 2>/dev/null || true
     docker run -d \
         --name smoke-test-volunteer \
         --gpus all \
         --add-host host.docker.internal:host-gateway \
-        -v /tmp/smoke-test-models:/models \
+        -v ~/smoke-test-models:/models \
         -e COORDINATOR_URL="http://host.docker.internal:8080" \
         -e VOLUNTEER_ID="smoke-test" \
         -e VOLUNTEER_SECRET="${COORDINATOR_SECRET}" \

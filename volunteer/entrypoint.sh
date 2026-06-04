@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-
 COORDINATOR_URL="${COORDINATOR_URL:?COORDINATOR_URL is required}"
 VOLUNTEER_ID="${VOLUNTEER_ID:-$(hostname)-$$}"
 MODEL_REPO="${MODEL_REPO:-Qwen/Qwen3-30B-A3B-GGUF}"
@@ -11,56 +10,70 @@ LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
 LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
 LLAMA_TEMP="${LLAMA_TEMP:-0.7}"
 MODEL_PATH="/models/${MODEL_FILE}"
-
-GPU_INFO="CPU (no GPU detected)"
 LLAMA_N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-99}"
 
-detect_gpu() {
+check_vram() {
+    local info=$(curl -sf "https://huggingface.co/api/models/${MODEL_REPO}" 2>/dev/null) || return 0
+    local size=$(echo "$info" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for s in d.get('siblings',[]):
+    if '${MODEL_FILE}' in s.get('rfilename',''):
+        print(s.get('size',0))
+        sys.exit(0)
+print(0)
+" 2>/dev/null) || size=0
+    [ "$size" -le 0 ] && return 0
+    local mb=$(( size / 1024 / 1024 ))
+    local total=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1 | grep -oE '[0-9]+') || total=0
+    local free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader 2>/dev/null | head -1 | grep -oE '[0-9]+') || free=0
+    echo "  VRAM: ${total}MiB total, ${free}MiB free, model: ~${mb}MiB"
+    [ "$total" -gt 0 ] && [ "$mb" -gt "$total" ] && LLAMA_N_GPU_LAYERS=0 && echo "  Warning: model may not fit VRAM, falling back to CPU"
+}
+
+while true; do
+    echo "=== Container start ==="
+    GPU_INFO="CPU (no GPU detected)"
     if command -v nvidia-smi &>/dev/null; then
-        local smi_out
-        smi_out=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -5)
-        if [ -n "${smi_out}" ]; then
-            GPU_INFO=$(echo "${smi_out}" | head -1)
-            return 0
-        fi
+        local smi=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
+        [ -n "$smi" ] && GPU_INFO="$smi"
     fi
-    return 1
-}
+    case "${GPU_DEVICES:-}" in
+        "")  [ "$GPU_INFO" != "CPU" ] && export CUDA_VISIBLE_DEVICES="0" || LLAMA_N_GPU_LAYERS=0 ;;
+        "none") LLAMA_N_GPU_LAYERS=0 ;;
+        "all") echo "$GPU_INFO" | grep -qi cpu && LLAMA_N_GPU_LAYERS=0 || unset CUDA_VISIBLE_DEVICES ;;
+        *)   export CUDA_VISIBLE_DEVICES="$GPU_DEVICES" ;;
+    esac
+    export GPU_INFO
+    echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
+    check_vram || true
 
-case "${GPU_DEVICES:-}" in
-    "") if detect_gpu; then export CUDA_VISIBLE_DEVICES="0"; else LLAMA_N_GPU_LAYERS=0; fi ;;
-    "none") LLAMA_N_GPU_LAYERS=0 ;;
-    "all") if detect_gpu; then unset CUDA_VISIBLE_DEVICES; else LLAMA_N_GPU_LAYERS=0; fi ;;
-    *) export CUDA_VISIBLE_DEVICES="${GPU_DEVICES}"; if ! detect_gpu; then LLAMA_N_GPU_LAYERS=0; fi ;;
-esac
-export GPU_INFO
+    if [ ! -f "$MODEL_PATH" ]; then
+        local dl="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
+        echo "  Downloading model..."
+        curl -# -L "$dl" -o "${MODEL_PATH}.tmp" 2>&1
+        mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
+        echo "  Download complete"
+    else
+        echo "  Model found: $MODEL_PATH"
+    fi
 
-download_model() {
-    local url=$1 dest=$2
-    curl -# -L "${url}" -o "${dest}.tmp" 2>&1
-    if [ $? -ne 0 ]; then rm -f "${dest}.tmp"; exit 1; fi
-    mv "${dest}.tmp" "${dest}"
-}
+    echo "  Starting llama-server..."
+    /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" -ngl "$LLAMA_N_GPU_LAYERS" -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
+    LLAMA_PID=$!
+    local ok=0
+    for i in $(seq 1 30); do
+        if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
+        sleep 1
+    done
+    if [ "$ok" -eq 0 ]; then echo "  Server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
 
-if [ ! -f "${MODEL_PATH}" ]; then
-    DOWNLOAD_URL="${MODEL_URL:-https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true}"
-    download_model "${DOWNLOAD_URL}" "${MODEL_PATH}"
-fi
-
-echo "Starting llama-server..."
-/app/llama-server -m "${MODEL_PATH}" --host 0.0.0.0 --port "${LLAMA_PORT}" -ngl "${LLAMA_N_GPU_LAYERS}" -c "${LLAMA_CTX_SIZE}" -np "${LLAMA_N_PARALLEL}" --no-ui --no-warmup &
-LLAMA_PID=$!
-
-for i in $(seq 1 30); do
-    if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then break; fi
-    [ $i -eq 30 ] && exit 1
-    sleep 1
+    echo "  Starting agent..."
+    cd /app && python3 agent.py &
+    AGENT_PID=$!
+    trap "kill $LLAMA_PID $AGENT_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+    echo "  Volunteer running"
+    wait -n 2>/dev/null || wait
+    echo "=== Process ended, restarting in 5s ==="
+    sleep 5
 done
-
-echo "Starting agent..."
-cd /app && python3 agent.py &
-AGENT_PID=$!
-
-trap "kill ${LLAMA_PID} ${AGENT_PID} 2>/dev/null; exit 0" SIGTERM SIGINT
-echo "Volunteer running"
-wait -n 2>/dev/null || wait

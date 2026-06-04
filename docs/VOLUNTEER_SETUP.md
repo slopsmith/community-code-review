@@ -17,34 +17,41 @@ You'll run a **Docker container** on your machine that uses your GPU to help rev
 |-------------|--------------|---------|
 | Windows OS (default) | You know what OS you're running, right? | (Mac/Linux users: Follow the instructions for Terminal below) |
 | Docker Desktop | Look for the Docker whale icon in your system tray (taskbar) | Install from [docker.com](https://docs.docker.com/get-docker/) — enable **WSL 2 backend** during setup on Windows |
-| NVIDIA GPU (optional, but recommended!) | Open **Task Manager → Performance** tab — look for "GPU" | Install latest NVIDIA drivers from [nvidia.com/drivers](https://www.nvidia.com/drivers) |
-| 12GB+ free disk | Check **This PC** in File Explorer | For the model file (~7GB) + Docker image |
-| 8GB+ VRAM (GPU) or 16GB+ RAM (CPU) | Task Manager → Performance → GPU "Dedicated GPU memory" | Required for smooth performance |
+| NVIDIA GPU | Open **Task Manager → Performance** tab — look for "GPU" | Install latest NVIDIA drivers from [nvidia.com/drivers](https://www.nvidia.com/drivers) |
+| 13GB+ free disk | Check **This PC** in File Explorer | For the model file (~7GB) + Docker image |
+| GPU VRAM: 8GB+ dedicated or 16GB+ shared | Task Manager → Performance → GPU "Dedicated/Shared GPU memory" | Required for smooth performance |
 
-> **No GPU?** You can still help! The container will run on CPU. It's slower, but every bit helps.
 
-## Option 1: Run via Docker Desktop (easiest)
-
-No command line needed — everything is done with mouse clicks.
+## Quick Start
 
 ### Step 1: Create a folder for the model
 
-Create a folder called `code-review-models` somewhere on your computer — for example, in File Explorer go to `C:\` and make a new folder. Note the drive will need 12GB free.
+In File Explorer, create a folder called `code-review-models` — for example at `C:\code-review-models`. The drive needs about 12GB of free space for the model.
 
-### Step 2: Run the container
+### Step 2: Open Docker Desktop's terminal and pull the image
 
 1. Open **Docker Desktop** (double-click the whale icon in your system tray)
-2. Go to the **Images** tab
-3. In the search bar at the top, type `ghcr.io/slopsmith/volunteer` and press Enter
-4. When the image appears, click the **Run** button (the play icon) next to it — Docker Desktop will pull the image automatically
-5. A dialog titled **"Run a new container"** will open. Click **Optional Settings** to expand it
-6. Fill in the dialog. (Note the name is just a way for us to distinguish you from other volunteers; your GitHub or Discord username is a good option.)
+2. At the bottom-right of the Docker Desktop window, click the **terminal icon**
+3. In the terminal that opens, paste this command and press Enter:
+
+```
+docker pull ghcr.io/slopsmith/volunteer:latest
+```
+
+Wait for the download to finish — you'll see progress in the terminal.
+
+### Step 3: Create and run the container (Docker Desktop GUI)
+
+1. In Docker Desktop, go to the **Images** tab
+2. Find `ghcr.io/slopsmith/volunteer:latest` and click the **Run** button (the play icon)
+3. A dialog titled **"Run a new container"** will open. Click **Optional Settings** to expand it
+4. Fill in the dialog:
 
    | Field | Value |
    |-------|-------|
    | **Container name** | `code-review-volunteer` |
    | **Ports** | leave empty |
-   | **Volumes** | click **Add Volume** → set Host Path to `C:\code-review-models` (or what you choseand Container Path to `/models` |
+   | **Volumes** | click **Add Volume** → set Host Path to the directory you created in Step 1 and Container Path to `/models` |
    | **Env Variables** | add each one below |
 
    | Variable | Value |
@@ -53,51 +60,11 @@ Create a folder called `code-review-models` somewhere on your computer — for e
    | `VOLUNTEER_ID` | `<your-name>` |
    | `VOLUNTEER_SECRET` | `<coordinator-secret>` |
 
-7. Click **Run**
+5. Click **Run**
 
 The container will start and appear in the **Containers** tab with a green "Running" indicator.
 
 > **No GPU?** Leave the GPU settings as-is. The container detects your GPU automatically. If you don't have one, add `GPU_DEVICES` with value `none` in the environment variables section.
-
-## Option 2: Run via Docker Desktop's built-in terminal
-
-If you prefer a command line, use the terminal built into Docker Desktop — it's already configured correctly and uses bash syntax.
-
-### Step 1: Open Docker's terminal
-
-1. Open **Docker Desktop** (double-click the whale icon in your system tray)
-2. At the bottom-right of the Docker Desktop window, click the **terminal icon** (or go to the **Containers** tab and click the terminal button)
-3. A bash shell will open
-
-### Step 2: Create a folder for the model
-
-```bash
-# Run this in Docker's built-in terminal
-mkdir -p /c/Users/YourName/code-review-models
-```
-
-You can also just create the folder in File Explorer — the path will be `/c/Users/YourName/code-review-models` in the Docker terminal.
-
-### Step 3: Run the container
-
-```bash
-docker run -d \
-  --name code-review-volunteer \
-  --gpus all \
-  -v /c/Users/YourName/code-review-models:/models \
-  -e COORDINATOR_URL="<coordinator-url>" \
-  -e VOLUNTEER_ID="<your-github-or-discord-name>" \
-  -e VOLUNTEER_SECRET="<coordinator-secret>" \
-  ghcr.io/<your-org>/volunteer:latest
-```
-
-Fill in the values from your coordinator:
-
-- `<coordinator-url>` — the coordinator's web address (look for `https://` from the leader)
-- `<coordinator-secret>` — the secret password the leader gave you
-- `YourName` — your Windows username (or use the folder path you created)
-
-> **No GPU?** Remove the `--gpus all` line and add `-e GPU_DEVICES=none` instead.
 
 ## What You'll See
 
@@ -161,25 +128,9 @@ A friendly name so the team knows who's helping. Defaults to your computer's hos
 
 The coordinator requires authentication, so you must set this — the coordinator will reject your connection without the correct value.
 
-## Advanced: CPU-only Mode
-
-If you don't have a GPU (or don't want to share it), open Docker Desktop's terminal and run:
-
-```bash
-docker run -d \
-  --name code-review-volunteer \
-  -v /c/Users/YourName/code-review-models:/models \
-  -e COORDINATOR_URL="<coordinator-url>" \
-  -e VOLUNTEER_ID="my-cpu-rig" \
-  -e GPU_DEVICES="none" \
-  ghcr.io/<your-org>/volunteer:latest
-```
-
-> Remove the `--gpus all` flag when running CPU-only — it will cause an error if no GPU is available. This command already has `GPU_DEVICES=none` set.
-
 ## Advanced: Custom Model
 
-If the coordinator asks you to use a different model, open Docker Desktop's terminal and run:
+If the coordinator asks you to use a different model, make sure Git for Windows is installed, open a Bash terminal, and run:
 
 ```bash
 docker run -d \
@@ -189,7 +140,7 @@ docker run -d \
   -e COORDINATOR_URL="<coordinator-url>" \
   -e MODEL_REPO="Qwen/Qwen3-30B-A3B-GGUF" \
   -e MODEL_FILE="Qwen3-30B-A3B-Q4_K_M.gguf" \
-  ghcr.io/<your-org>/volunteer:latest
+  ghcr.io/slopsmith/volunteer:latest
 ```
 
 Or from a direct download URL:
@@ -204,7 +155,6 @@ Controls which GPU to use when you have multiple GPUs. By default the container 
 
 - `-e GPU_DEVICES="all"` — use all GPUs
 - `-e GPU_DEVICES="0,1"` — use specific GPUs by index
-- `-e GPU_DEVICES="none"` — CPU only (omit `--gpus all` flag too)
 
 Most volunteers won't need to set this.
 
@@ -216,7 +166,6 @@ Most volunteers won't need to set this.
 | "Coordinator not reachable" | Wrong URL or coordinator is down | Check the coordinator URL is correct and the server is running |
 | "Registration rejected" | Wrong VOLUNTEER_SECRET | Ask the coordinator for the correct secret |
 | "Model download failed" | Network issue or wrong URL | Check MODEL_URL is correct |
-| Container exits immediately | Docker Desktop GPU passthrough not configured | Run without `--gpus all` and add `-e GPU_DEVICES=none` for CPU fallback |
 | Slow reviews | Under-powered machine | Every bit helps! Consider lowering `LLAMA_CTX_SIZE=16384` |
 
 ## Stopping
@@ -263,3 +212,6 @@ docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
 ```
 
 If you see GPU info, it's working. If you get an error, make sure Docker Desktop is using the WSL 2 backend and your NVIDIA drivers are up to date.
+
+**Q: Can I run a smaller/bigger model to better suit my hardware?**
+A. Not yet, let's get this working on the target RTX 3060 spec before we make it adjustable.
