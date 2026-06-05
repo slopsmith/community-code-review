@@ -49,8 +49,11 @@ flowchart TB
 community-code-review/
 ├── README.md                    ← This file
 ├── ARCHITECTURE.md              ← Full architecture & design decisions
-├── setup.sh                    ← One-command setup (Git Bash / Linux / macOS)
-├── teardown.sh                 ← Cleanup script (Git Bash / Linux / macOS)
+├── LICENSE.md                   ← MIT License
+├── setup.sh                     ← One-command setup (Git Bash / Linux / macOS)
+├── teardown.sh                  ← Cleanup script (Git Bash / Linux / macOS)
+├── scripts/
+│   └── test.sh                  ← Integration test (deterministic, CI-ready)
 ├── coordinator/                 ← Coordinator Docker image (relay server)
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -63,8 +66,8 @@ community-code-review/
 │   ├── LEADER_SETUP.md          ← How the leader sets everything up
 │   ├── VOLUNTEER_SETUP.md       ← How volunteers join the network
 │   └── GITHUB_ACTIONS_SETUP.md  ← How to configure the workflow per repo
-├── .env.example                ← Template for environment variables
-└── docker-compose.yml          ← Orchestrates coordinator + runner
+├── .env.example                 ← Template for environment variables
+└── docker-compose.yml           ← Orchestrates coordinator + runner
 ```
 
 ## Quick Links
@@ -73,6 +76,24 @@ community-code-review/
 - [Leader Setup Guide](docs/LEADER_SETUP.md)
 - [Volunteer Setup Guide](docs/VOLUNTEER_SETUP.md)
 - [GitHub Actions Configuration](docs/GITHUB_ACTIONS_SETUP.md)
+
+## Testing
+
+A deterministic integration test is included that verifies the full coordinator → volunteer pipeline without requiring a GPU or downloading a model.
+
+```bash
+# Run the integration test (uses MOCK_MODE by default)
+./scripts/test.sh
+```
+
+The test:
+- Builds coordinator and volunteer images from source
+- Spins up an isolated Docker network
+- Verifies volunteer registration and metadata
+- Sends a real inference request through the pipeline
+- Cleans up all containers automatically
+
+It runs automatically in CI on pushes and pull requests (see `.github/workflows/integration-test.yml`).
 
 ## License
 
