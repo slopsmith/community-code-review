@@ -43,6 +43,9 @@ cleanup() {
     docker network rm "${NETWORK_NAME}" >/dev/null 2>&1 || true
 }
 
+# Clean up any leftovers from previous aborted runs
+cleanup
+
 trap cleanup EXIT
 
 # ── Step 1: Build coordinator image ───────────────────────────────────────
