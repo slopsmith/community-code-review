@@ -89,8 +89,8 @@ elif echo "${UNIT_TEST_RESULT}" | grep -q "FAILED"; then
     echo "${UNIT_TEST_RESULT}"
     fail "Unit tests FAILED"
 else
-    fail "Unit test output ambiguous — pytest may have crashed"
     echo "${UNIT_TEST_RESULT}" | tail -30
+    fail "Unit test output ambiguous — pytest may have crashed"
 fi
 
 # ── Step 3: Create isolated Docker network ────────────────────────────────
