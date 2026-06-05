@@ -47,7 +47,6 @@ jobs:
             --from "origin/${{ github.base_ref }}" \
             --to "origin/${{ github.head_ref }}" \
             --format json \
-            --audience agent \
             > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
 
       - name: Post review comments to PR
