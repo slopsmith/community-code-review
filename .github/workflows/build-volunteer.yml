@@ -78,11 +78,13 @@ jobs:
       - name: Tag cuda as latest
         if: matrix.backend == 'cuda' && steps.tags.outputs.latest_tag != ''
         env:
-          REPO_OWNER: ${{ github.repository_owner }}
+          SOURCE_TAG: ${{ steps.tags.outputs.tags }}
           LATEST_TAG: ${{ steps.tags.outputs.latest_tag }}
         run: |
+          # build-push-action pushes via buildx without loading locally,
+          # so we use imagetools create to retag the already-pushed image.
+          FIRST_TAG=$(echo "${SOURCE_TAG}" | cut -d',' -f1)
           IFS=',' read -ra TAGS <<< "${LATEST_TAG}"
           for tag in "${TAGS[@]}"; do
-            docker tag "ghcr.io/${REPO_OWNER}/volunteer:cuda" "$tag"
-            docker push "$tag"
+            docker buildx imagetools create --tag "$tag" "$FIRST_TAG"
           done
