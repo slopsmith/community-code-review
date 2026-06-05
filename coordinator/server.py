@@ -32,6 +32,8 @@ from fastapi.responses import JSONResponse
 COORDINATOR_SECRET = os.environ.get("COORDINATOR_SECRET", "")
 COORDINATOR_PORT = int(os.environ.get("COORDINATOR_PORT", "8080"))
 STALE_VOLUNTEER_SECONDS = 90  # evict if no heartbeat for this long
+GPU_UTIL_THRESHOLD = int(os.environ.get("GPU_UTIL_THRESHOLD", "70"))
+GPU_MEM_THRESHOLD = int(os.environ.get("GPU_MEM_THRESHOLD", "85"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +48,11 @@ app = FastAPI(title="CCR Coordinator")  # Community Code Review
 #     "websocket": WebSocket,
 #     "gpu_info": str,
 #     "model": str,
+#     "model_state": str,        # unloaded, loading, ready, busy
+#     "gpu_utilization_percent": int,
+#     "gpu_memory_used_percent": int,
+#     "max_parallel": int,
+#     "load_duration_seconds": float,
 #     "last_heartbeat": float,
 #     "active_requests": int,
 #     "registered_at": float,
@@ -84,14 +91,53 @@ async def _evict_stale_volunteers():
 
 
 async def _pick_volunteer() -> Optional[tuple[str, dict]]:
-    """Pick the least-loaded volunteer."""
+    """Pick the best volunteer based on state, GPU availability, and load."""
     async with _vol_lock:
         if not volunteers:
             return None
-        best_vid = min(volunteers, key=lambda v: volunteers[v]["active_requests"])
-        v = volunteers[best_vid]
+
+        # Filter out volunteers that are loading or have busy GPUs
+        available = []
+        for vid, v in volunteers.items():
+            state = v.get("model_state", "ready")  # v1 clients default to ready
+            util = v.get("gpu_utilization_percent", 0)
+            mem = v.get("gpu_memory_used_percent", 0)
+            max_p = v.get("max_parallel", 1)
+            active = v.get("active_requests", 0)
+
+            # Skip loading volunteers
+            if state == "loading":
+                continue
+
+            # Skip GPU-busy volunteers (v2+ only; v1 clients bypass this)
+            if v.get("protocol_version", 1) >= 2:
+                if util > GPU_UTIL_THRESHOLD or mem > GPU_MEM_THRESHOLD:
+                    continue
+
+            # Skip at-capacity volunteers
+            if active >= max_p:
+                continue
+
+            available.append((vid, v))
+
+        if not available:
+            return None
+
+        # Prefer ready volunteers, then unloaded, then busy with capacity
+        def sort_key(item):
+            vid, v = item
+            state = v.get("model_state", "ready")
+            active = v.get("active_requests", 0)
+            # ready first (0), then busy (1), then unloaded (2)
+            state_order = {"ready": 0, "busy": 1, "unloaded": 2}.get(state, 3)
+            return (state_order, active)
+
+        available.sort(key=sort_key)
+        best_vid, v = available[0]
         v["active_requests"] += 1
-        logger.debug("Assigned request to %s (load: %d)", best_vid, v["active_requests"])
+        logger.info("Assigned request to %s (state=%s, load=%d/%d)",
+                    best_vid, v.get("model_state", "ready"),
+                    v["active_requests"], v.get("max_parallel", 1))
         return best_vid, v
 
 
@@ -143,22 +189,37 @@ async def websocket_endpoint(ws: WebSocket, volunteer_id: str):
     gpu_info = init_msg.get("gpu_info", "unknown")
     model = init_msg.get("model", "unknown")
     peer_addr = ws.client.host if ws.client else "unknown"
+    protocol_version = init_msg.get("protocol_version", 1)
 
     async with _vol_lock:
         volunteers[volunteer_id] = {
             "websocket": ws,
             "gpu_info": gpu_info,
             "model": model,
+            "protocol_version": protocol_version,
+            "model_state": "ready" if protocol_version == 1 else "unloaded",
+            "gpu_utilization_percent": 0,
+            "gpu_memory_used_percent": 0,
+            "max_parallel": 1,
+            "load_duration_seconds": 0,
             "last_heartbeat": time.time(),
             "active_requests": 0,
             "registered_at": time.time(),
             "peer_addr": peer_addr,
         }
 
-    logger.info(
-        "Volunteer connected via WebSocket: %s [%s] model=%s from %s pool=%d",
-        volunteer_id, gpu_info, model, peer_addr, len(volunteers),
-    )
+    if protocol_version < 2:
+        logger.warning(
+            "Volunteer %s is using protocol v%d (outdated). "
+            "Please update your volunteer image for GPU-aware scheduling. "
+            "Run: docker pull ghcr.io/slopsmith/volunteer:latest",
+            volunteer_id, protocol_version
+        )
+    else:
+        logger.info(
+            "Volunteer connected via WebSocket: %s [%s] model=%s from %s pool=%d (protocol v%d)",
+            volunteer_id, gpu_info, model, peer_addr, len(volunteers), protocol_version
+        )
 
     try:
         while True:
@@ -169,6 +230,27 @@ async def websocket_endpoint(ws: WebSocket, volunteer_id: str):
                 async with _vol_lock:
                     if volunteer_id in volunteers:
                         volunteers[volunteer_id]["last_heartbeat"] = time.time()
+
+            elif msg_type == "gpu_status":
+                # v2+ clients report GPU utilization
+                async with _vol_lock:
+                    if volunteer_id in volunteers:
+                        volunteers[volunteer_id]["gpu_utilization_percent"] = data.get("utilization_percent", 0)
+                        volunteers[volunteer_id]["gpu_memory_used_percent"] = data.get("memory_used_percent", 0)
+
+            elif msg_type == "model_state":
+                # v2+ clients report model load/unload state
+                async with _vol_lock:
+                    if volunteer_id in volunteers:
+                        old_state = volunteers[volunteer_id].get("model_state", "unloaded")
+                        new_state = data.get("state", old_state)
+                        volunteers[volunteer_id]["model_state"] = new_state
+                        if "load_duration_seconds" in data:
+                            volunteers[volunteer_id]["load_duration_seconds"] = data["load_duration_seconds"]
+                        if "max_parallel" in data:
+                            volunteers[volunteer_id]["max_parallel"] = data["max_parallel"]
+                        if old_state != new_state:
+                            logger.info("Volunteer %s model state: %s → %s", volunteer_id, old_state, new_state)
 
             elif msg_type == "inference_result":
                 req_id = data.get("id")
@@ -260,6 +342,11 @@ async def list_volunteers():
                 "id": vid,
                 "gpu_info": v["gpu_info"],
                 "model": v["model"],
+                "protocol_version": v.get("protocol_version", 1),
+                "model_state": v.get("model_state", "ready"),
+                "gpu_utilization_percent": v.get("gpu_utilization_percent", 0),
+                "gpu_memory_used_percent": v.get("gpu_memory_used_percent", 0),
+                "max_parallel": v.get("max_parallel", 1),
                 "active_requests": v["active_requests"],
                 "uptime_seconds": int(now - v["registered_at"]),
                 "last_heartbeat_seconds_ago": int(now - v["last_heartbeat"]),
