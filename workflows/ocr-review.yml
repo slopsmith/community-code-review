@@ -34,7 +34,7 @@ jobs:
 
       - name: Configure OCR
         run: |
-          ocr config set llm.url "http://coordinator:8080"
+          ocr config set llm.url "http://coordinator:8080/v1"
           ocr config set llm.auth_token "${{ secrets.OCR_COORDINATOR_SECRET }}"
           ocr config set llm.model "${{ secrets.OCR_LLM_MODEL || 'qwen3-30b-a3b' }}"
           ocr config set llm.use_anthropic false
