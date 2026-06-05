@@ -3,7 +3,7 @@ set -e
 COORDINATOR_URL="${COORDINATOR_URL:?COORDINATOR_URL is required}"
 VOLUNTEER_ID="${VOLUNTEER_ID:-$(hostname)-$$}"
 MODEL_REPO="${MODEL_REPO:-Qwen/Qwen3-30B-A3B-GGUF}"
-MODEL_FILE="${MODEL_FILE:-Qwen3-30B-A3B-Q4_K_M.gguf}"
+export MODEL_FILE="${MODEL_FILE:-Qwen3-30B-A3B-Q4_K_M.gguf}"
 MODEL_URL="${MODEL_URL:-}"
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
@@ -51,7 +51,6 @@ while true; do
         *)   export CUDA_VISIBLE_DEVICES="$GPU_DEVICES" ;;
     esac
     export GPU_INFO
-    export MODEL_FILE
     echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
     check_vram || true
 
