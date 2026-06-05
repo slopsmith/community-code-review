@@ -93,15 +93,21 @@ else
 fi
 echo ""
 
-# ── Step 5: Start Docker containers (skip if already running) ────────────
+# ── Step 5: Pull latest images and start/update containers ───────────────
 RUNNING=$(docker compose ps --status running 2>/dev/null | grep -c "Up" || true)
 if [ "$RUNNING" -ge 2 ]; then
-    echo "🐳 Coordinator and runner are already running — skipping"
+    echo "🐳 Containers are running — checking for updates..."
 else
-    echo "🐳 Starting coordinator and runner..."
-    docker compose up -d
-    echo "  ✓ Containers started"
-    echo ""
+    echo "🐳 Pulling latest images..."
+fi
+docker compose pull
+echo "  ✓ Images up to date"
+echo ""
+echo "🐳 Starting coordinator and runner..."
+docker compose up -d
+echo "  ✓ Containers started"
+echo ""
+if [ "$RUNNING" -lt 2 ]; then
     echo "⏳ Waiting for runner to register with GitHub..."
     sleep 5
     echo "    https://github.com/organizations/${GITHUB_ORG_NAME}/settings/actions/runners"
