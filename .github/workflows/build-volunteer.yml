@@ -6,6 +6,8 @@ on:
     paths:
       - "volunteer/**"
       - "!volunteer/**/*.md"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Determine image tags
+        id: tags
+        run: |
+          BACKEND="${{ matrix.backend }}"
+          REPO="ghcr.io/${{ github.repository_owner }}/volunteer"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            echo "tags=${REPO}:${BACKEND},${REPO}:${BACKEND}-${TAG}" >> "$GITHUB_OUTPUT"
+            if [ "$BACKEND" = "cuda" ]; then
+              echo "latest_tag=${REPO}:latest,${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "tags=${REPO}:${BACKEND}" >> "$GITHUB_OUTPUT"
+            if [ "$BACKEND" = "cuda" ]; then
+              echo "latest_tag=${REPO}:latest" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -34,15 +54,17 @@ jobs:
         with:
           context: volunteer
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/volunteer:${{ matrix.backend }}
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             ORG_NAME=${{ github.repository_owner }}
             BACKEND=${{ matrix.backend }}
 
       # Tag the CUDA build as "latest" too (most common backend)
       - name: Tag cuda as latest
-        if: matrix.backend == 'cuda'
+        if: matrix.backend == 'cuda' && steps.tags.outputs.latest_tag != ''
         run: |
-          docker tag ghcr.io/${{ github.repository_owner }}/volunteer:cuda \
-                 ghcr.io/${{ github.repository_owner }}/volunteer:latest
-          docker push ghcr.io/${{ github.repository_owner }}/volunteer:latest
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.latest_tag }}"
+          for tag in "${TAGS[@]}"; do
+            docker tag ghcr.io/${{ github.repository_owner }}/volunteer:cuda "$tag"
+            docker push "$tag"
+          done
