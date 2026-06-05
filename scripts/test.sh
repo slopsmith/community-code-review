@@ -58,7 +58,7 @@ UNIT_TEST_RESULT=$(docker run --rm \
     -e GPU_UTIL_THRESHOLD=70 \
     -e GPU_MEM_THRESHOLD=85 \
     -e IDLE_TIMEOUT=30 \
-    -v "${PROJECT_ROOT}/volunteer/test_agent_state_machine.py:/app/test_agent_state_machine.py" \
+    -v "${PROJECT_ROOT}/tests/test_agent_state_machine.py:/app/test_agent_state_machine.py" \
     "${VOLUNTEER_IMAGE}" \
     python3 -m pytest /app/test_agent_state_machine.py -v 2>&1) || true
 

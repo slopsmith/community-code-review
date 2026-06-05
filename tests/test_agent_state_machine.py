@@ -5,7 +5,7 @@ These tests verify the model lifecycle (unloaded → loading → ready → busy 
 without needing a GPU, llama-server, or the coordinator. They mock the WebSocket and subprocess
 to test the decision logic in isolation.
 
-Run:  python3 -m pytest test_agent_state_machine.py -v
+Run:  python3 -m pytest tests/test_agent_state_machine.py -v
 """
 # pylint: disable=redefined-outer-name,protected-access,missing-function-docstring
 
