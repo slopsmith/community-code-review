@@ -1,6 +1,6 @@
 services:
   coordinator:
-    build: ./coordinator
+    image: ghcr.io/slopsmith/coordinator:latest
     ports:
       - "8080:8080"
     environment:
