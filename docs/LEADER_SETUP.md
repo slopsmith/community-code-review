@@ -48,7 +48,20 @@ The workflow that distributes code review configuration to repositories needs it
    |--------|-------|
    | `PAT_WITH_REPO_SCOPE` | The token you just generated |
 
-### 2. Trigger deployment to repositories
+### 2. Add the coordinator secret for OCR workflows
+
+The `.github/workflows/ocr-review.yml` that gets deployed to repositories needs to authenticate with your coordinator. Add another organization secret using the same volunteer secret from your `.env` file:
+
+1. Go to **GitHub → Your Organization → Settings → Secrets and variables → Actions**
+2. Add an **organization secret**:
+
+   | Secret | Value |
+   |--------|-------|
+   | `OCR_COORDINATOR_SECRET` | The `COORDINATOR_SECRET` value from your `.env` file |
+
+> You can find the value by running `cat .env | grep COORDINATOR_SECRET` in the project directory.
+
+### 3. Trigger deployment to repositories
 
 Go to the **Actions** tab in this repository and run the **Deploy OCR to Repositories** workflow:
 
@@ -59,7 +72,7 @@ The workflow will create a PR in each target repository adding `.github/workflow
 
 > To test it out, run the workflow with `repo_name` set to `community-code-review` — it will create a PR adding the workflow to this very repository.
 
-### 3. Send instructions to volunteers
+### 4. Send instructions to volunteers
 
 Share the link to [`VOLUNTEER_SETUP.md`](./VOLUNTEER_SETUP.md) along with:
 

@@ -31,7 +31,7 @@ jobs:
       - name: Configure OCR
         run: |
           ocr config set llm.url "http://coordinator:8080"
-          ocr config set llm.auth_token "unused"
+          ocr config set llm.auth_token "${{ secrets.OCR_COORDINATOR_SECRET }}"
           ocr config set llm.model "${{ secrets.OCR_LLM_MODEL || 'qwen3-30b-a3b' }}"
           ocr config set llm.use_anthropic false
           ocr config set llm.extra_body '{"thinking": {"type": "disabled"}}'
@@ -56,19 +56,37 @@ jobs:
 
             // Read OCR output
             let result;
+            let raw = '';
             try {
-              const raw = fs.readFileSync(path, 'utf8');
-              const jsonContent = raw.substring(raw.indexOf('\n') + 1);
-              result = JSON.parse(jsonContent);
+              raw = fs.readFileSync(path, 'utf8').trim();
+              if (!raw) {
+                throw new Error('OCR output file is empty');
+              }
+              // OCR may prefix a status line before JSON; try whole file first, then skip first line
+              try {
+                result = JSON.parse(raw);
+              } catch {
+                const jsonContent = raw.substring(raw.indexOf('\n') + 1);
+                result = JSON.parse(jsonContent);
+              }
             } catch (e) {
               console.log('Failed to parse OCR output:', e.message);
+              console.log('Raw OCR output (first 2000 chars):', raw.substring(0, 2000));
               const stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8').trim();
               if (stderr) {
+                console.log('OCR stderr:', stderr.substring(0, 2000));
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: context.issue.number,
                   body: `⚠️ **OpenCodeReview** encountered an error:\n\`\`\`\n${stderr}\n\`\`\``
+                });
+              } else if (raw) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `⚠️ **OpenCodeReview** encountered an error. Raw output:\n\`\`\`\n${raw.substring(0, 2000)}\n\`\`\``
                 });
               }
               return;
