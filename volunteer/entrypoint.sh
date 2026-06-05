@@ -51,6 +51,7 @@ while true; do
         *)   export CUDA_VISIBLE_DEVICES="$GPU_DEVICES" ;;
     esac
     export GPU_INFO
+    export MODEL_FILE
     echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
     check_vram || true
 
