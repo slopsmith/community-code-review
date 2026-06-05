@@ -26,6 +26,7 @@ logger = logging.getLogger("volunteer-agent")
 
 # ── Configuration from environment ───────────────────────────────────────
 COORDINATOR_URL = os.environ["COORDINATOR_URL"]
+COORDINATOR_URL = ""
 VOLUNTEER_ID = os.environ.get("VOLUNTEER_ID", f"{os.uname().nodename}-{os.getpid()}")
 VOLUNTEER_SECRET = os.environ.get("VOLUNTEER_SECRET", "")
 LLAMA_PORT = int(os.environ.get("LLAMA_PORT", "8080"))
