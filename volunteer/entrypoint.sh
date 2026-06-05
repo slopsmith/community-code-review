@@ -105,6 +105,11 @@ time.sleep(999999)
             echo "  Model found: $MODEL_PATH"
         fi
 
+        # Drop README in model directory so volunteers know what these files are
+        if [ -f /app/MODEL_README.md ] && [ -d /models ]; then
+            cp /app/MODEL_README.md /models/README.md
+        fi
+
         echo "  Starting llama-server..."
         ngl_arg=""
         [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"

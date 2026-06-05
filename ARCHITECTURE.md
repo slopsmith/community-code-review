@@ -66,7 +66,7 @@ No inbound firewall holes needed anywhere — works behind NAT, CGNAT, or strict
 
 ### Coordinator ↔ Volunteer (WebSocket tunnel)
 
-Volunteers connect to `ws://<coordinator>:8081/ws/<volunteer_id>` and keep the
+Volunteers connect to `ws://<coordinator>:8080/ws/<volunteer_id>` and keep the
 connection open. The coordinator sends work requests as JSON messages over this
 WebSocket, and the volunteer sends responses back over the same connection.
 
