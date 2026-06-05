@@ -62,6 +62,7 @@ Volunteers move through four states, tracked by the coordinator:
 | `loading` | Currently loading model into VRAM | ❌ No |
 | `ready` | Model loaded, GPU idle | ✅ Yes (preferred) |
 | `busy` | Model loaded, actively inferencing | ✅ Yes, if parallel slots available |
+| `unloading` | Freeing VRAM (stopping llama-server) | ❌ No |
 
 ### GPU Utilization Monitoring (Automatic)
 
@@ -71,13 +72,62 @@ The volunteer agent polls GPU utilization every 5 seconds and reports it to the 
 {"type": "gpu_status", "utilization_percent": 12, "memory_used_percent": 45}
 ```
 
-If the volunteer's GPU is busy with other work (gaming, rendering, etc.), the volunteer **unloads the model from VRAM** and notifies the coordinator. The coordinator stops sending new assignments, and the volunteer's GPU is completely free for other tasks. When the GPU quiets down, the volunteer returns to the `unloaded` state — connected and ready to reload on the next request.
+If the volunteer's GPU is busy with other work (gaming, rendering, etc.), the volunteer **unloads the model from VRAM** and notifies the coordinator. The coordinator stops sending new assignments, and the volunteer's GPU is completely free for other tasks. When the GPU quiets down, the volunteer remains in the `unloaded` state — connected and ready to reload on the next request.
 
 **Thresholds** (configurable via environment variables on the coordinator):
 - `GPU_UTIL_THRESHOLD` — default 70%
 - `GPU_MEM_THRESHOLD` — default 85%
 
-A volunteer exceeding either threshold transitions to `unloaded` (if not actively inferencing) or finishes the current request and then unloads.
+A volunteer exceeding either threshold transitions to `busy` (if actively inferencing, will finish first) then `unloaded` (stops llama-server).
+
+### Model Lifecycle (Real VRAM Management)
+
+In v3+, the agent manages llama-server as a child subprocess rather than relying on the entrypoint:
+
+| State | VRAM | llama-server | Accepts work? |
+|-------|------|--------------|---------------|
+| `unloaded` | Free | Stopped | ✅ Yes (will load on demand) |
+| `loading` | Loading | Starting | ❌ No |
+| `ready` | Loaded | Running, idle | ✅ Yes (preferred) |
+| `busy` | Loaded | Running, processing | ✅ Yes, if parallel slots available |
+| `unloading` | Freeing | Stopping | ❌ No |
+
+**State transitions:**
+
+```
+unloaded ──(inference arrives)──▶ loading ──(llama-srv up)──▶ ready ──(handle & busy)──▶ busy
+ready    ──(inference arrives)────────────────────────────────────────────────▶ busy
+busy     ──(last request done)─────▶ ready (still loaded, idle)
+busy     ──(GPU busy + done)───────▶ unloading ──(llama-srv down)▶ unloaded
+ready    ──(GPU busy)──────────────▶ unloading ──(llama-srv down)▶ unloaded
+ready    ──(idle timeout 120s)─────▶ unloading ──(llama-srv down)▶ unloaded
+```
+
+Note: `busy` means "at least one request in flight" — not "at capacity." The coordinator tracks `active_requests < max_parallel` before considering a volunteer saturated. llama-server handles concurrent requests via its `-np` flag (see below).
+
+### Parallel Processing
+
+llama-server supports multiple in-flight inference requests via the `-np` flag (default: 1). The coordinator respects this:
+
+- `max_parallel` is reported by the volunteer during initialization
+- The coordinator skips a volunteer when `active_requests >= max_parallel`
+- Each inference request runs in its own `asyncio.create_task` on the volunteer
+- llama-server batches concurrent prompt evaluations for GPU efficiency
+
+**Auto-tuning** (`entrypoint.sh`): If the volunteer doesn't explicitly set `LLAMA_N_PARALLEL`, the entrypoint auto-calculates it:
+
+```
+parallel_slots = floor((total_vram_mib - model_size_mib - 1024) / 2560)
+```
+
+Where 2560 MiB is the estimated KV cache overhead per 32K-context slot. The result is clamped to 1–8. Users can override by setting `LLAMA_N_PARALLEL` explicitly in the `docker run` environment.
+
+**Key behaviors:**
+- **Load on demand**: llama-server starts only when the first inference request after idle/unload arrives. The requester waits for the model to load (30-60s).
+- **Unload on GPU contention**: If another workload grabs the GPU (utilization > threshold), llama-server is SIGTERMed and VRAM is freed.
+- **Idle timeout**: After 120 seconds (configurable via `IDLE_TIMEOUT`) with no requests, the model is unloaded to save power and keep GPU idle states available.
+- **Mock mode**: In test/CI (`MOCK_MODE=1`), the entrypoint starts a lightweight Python HTTP stub instead of llama-server; the agent skips subprocess management and only probes the health endpoint.
+- **Power savings**: When a model is loaded in VRAM, the GPU cannot enter its deepest idle power states. Unloading during idle periods reduces power draw, heat, and energy consumption — important for a project with climate-conscious goals.
 
 ### Scheduling Priority
 
@@ -85,7 +135,14 @@ The coordinator assigns work in this order:
 
 1. **`ready` volunteers** with lowest `active_requests / max_parallel` ratio
 2. **`busy` volunteers** with remaining capacity (`active_requests < max_parallel`)
-3. **`unloaded` volunteers** (they'll load on demand — adds 30–60s latency)
+3. **`unloaded` volunteers** — they'll load on demand (adds 30–60s latency for model load)
+   - The coordinator should prefer ready volunteers when possible.
+   - Once assigned, the volunteer's agent starts llama-server and waits for it to become healthy.
+4. **Never pick `loading` or `unloading`** — they'd just queue behind their own state transition.
+
+### Capacity Check
+
+Before assigning work, the coordinator also checks that `active_requests < max_parallel` for the volunteer. A `ready` volunteer with `active_requests == max_parallel` is treated as full — the coordinator moves on to the next candidate. `busy` volunteers with remaining slots are preferred over `unloaded` ones to avoid model-load latency.
 4. **Never pick `loading`** — they'd just queue behind their own load
 
 This minimizes time-to-review while respecting volunteer GPU availability.
@@ -142,6 +199,7 @@ On error:
 ```json
 {"type": "model_state", "state": "loading"}
 {"type": "model_state", "state": "ready", "load_duration_seconds": 42.5, "max_parallel": 4}
+{"type": "model_state", "state": "busy"}
 {"type": "model_state", "state": "unloading"}
 {"type": "model_state", "state": "unloaded"}
 ```
