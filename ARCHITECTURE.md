@@ -11,6 +11,7 @@ The system has three components:
 ### Design Principles
 
 - **Zero-friction for volunteers** — set three env vars, run one command, you're done
+- **Gamer-friendly** — volunteers automatically step aside when their GPU is busy; no manual toggles needed
 - **Defense in depth** — volunteers make only outbound connections; GPU and model volume are the only host resources shared
 - **Truly no inbound** — the coordinator never connects to volunteers; volunteers connect outbound and stay connected
 - **Sensible defaults, optional overrides** — everything has a default; only customization is opt-in
@@ -51,11 +52,49 @@ The critical insight: **volunteers open the WebSocket outbound** and keep it ope
 The coordinator never initiates a TCP connection to the volunteer — it sends work
 through the already-established WebSocket tunnel.
 
+## Volunteer Lifecycle & GPU Awareness
+
+Volunteers move through four states, tracked by the coordinator:
+
+| State | Description | Accepts work? |
+|-------|-------------|---------------|
+| `unloaded` | Connected, no model in VRAM | ✅ Yes (will load on demand) |
+| `loading` | Currently loading model into VRAM | ❌ No |
+| `ready` | Model loaded, GPU idle | ✅ Yes (preferred) |
+| `busy` | Model loaded, actively inferencing | ✅ Yes, if parallel slots available |
+
+### GPU Utilization Monitoring (Automatic)
+
+The volunteer agent polls GPU utilization every 5 seconds and reports it to the coordinator:
+
+```json
+{"type": "gpu_status", "utilization_percent": 12, "memory_used_percent": 45}
+```
+
+If the volunteer's GPU is busy with other work (gaming, rendering, etc.), the volunteer **unloads the model from VRAM** and notifies the coordinator. The coordinator stops sending new assignments, and the volunteer's GPU is completely free for other tasks. When the GPU quiets down, the volunteer returns to the `unloaded` state — connected and ready to reload on the next request.
+
+**Thresholds** (configurable via environment variables on the coordinator):
+- `GPU_UTIL_THRESHOLD` — default 70%
+- `GPU_MEM_THRESHOLD` — default 85%
+
+A volunteer exceeding either threshold transitions to `unloaded` (if not actively inferencing) or finishes the current request and then unloads.
+
+### Scheduling Priority
+
+The coordinator assigns work in this order:
+
+1. **`ready` volunteers** with lowest `active_requests / max_parallel` ratio
+2. **`busy` volunteers** with remaining capacity (`active_requests < max_parallel`)
+3. **`unloaded` volunteers** (they'll load on demand — adds 30–60s latency)
+4. **Never pick `loading`** — they'd just queue behind their own load
+
+This minimizes time-to-review while respecting volunteer GPU availability.
+
 ## Connections
 
 | Direction | Protocol | Purpose |
 |-----------|----------|---------|
-| Volunteer → Coordinator | **WebSocket** (outbound) | Persistent tunnel: registration (`init`), heartbeat, **receiving work** |
+| Volunteer → Coordinator | **WebSocket** (outbound) | Persistent tunnel: registration (`init`), heartbeat, **receiving work**, GPU status |
 | Self-hosted runner → Coordinator | HTTP (outbound) | `ocr review` API calls |
 | Volunteer → Hugging Face / URL | HTTPS (outbound) | Model download (if not cached) |
 
@@ -94,6 +133,19 @@ On error:
 { "type": "inference_result", "id": "req-uuid", "status": "error", "error": "message" }
 ```
 
+**Message from volunteer → coordinator (GPU status):**
+```json
+{"type": "gpu_status", "utilization_percent": 12, "memory_used_percent": 45}
+```
+
+**Message from volunteer → coordinator (model state):**
+```json
+{"type": "model_state", "state": "loading"}
+{"type": "model_state", "state": "ready", "load_duration_seconds": 42.5, "max_parallel": 4}
+{"type": "model_state", "state": "unloading"}
+{"type": "model_state", "state": "unloaded"}
+```
+
 The volunteer also sends periodic heartbeat pings over the WebSocket.
 
 ### OCR → Coordinator (OpenAI-compatible)
@@ -112,8 +164,10 @@ Auth:     Authorization: Bearer <token> (optional, configurable)
 |-----------|--------|---------|
 | **WebSocket `init` message** | On connect (first message) | `{"type": "init", "gpu_info": "...", "model": "..."}` |
 | **WebSocket `heartbeat` message** | Every 30s | `{"type": "heartbeat"}` |
+| **WebSocket `gpu_status` message** | Every 5s | `{"type": "gpu_status", "utilization_percent": 12, "memory_used_percent": 45}` |
+| **WebSocket `model_state` message** | On state change | `{"type": "model_state", "state": "ready", "load_duration_seconds": 42.5}` |
 
-Both happen over the **same persistent WebSocket** connection — no separate HTTP endpoints needed.
+All happen over the **same persistent WebSocket** connection — no separate HTTP endpoints needed.
 
 ## Key Design Decisions
 
@@ -132,6 +186,10 @@ Volunteers shouldn't need to hunt for model files. The entrypoint downloads from
 ### Why GPU_DEVICES=0 as default?
 
 Most volunteers have a single GPU. Auto-detect the first one. `GPU_DEVICES=none` falls back to CPU. `GPU_DEVICES=all` uses every available GPU. `GPU_DEVICES=0,1` selects specific devices.
+
+### Why automatic GPU utilization monitoring?
+
+Volunteers are often gamers. We don't want to grab their GPU while they're using it, and we don't want them to have to think about toggling anything. The container monitors its own GPU and quietly steps aside when busy.
 
 ## Security Model
 
