@@ -122,7 +122,12 @@ async def _pick_volunteer() -> Optional[tuple[str, dict]]:
                 continue
 
             # Skip GPU-busy volunteers (v2+ only; v1 clients bypass this)
-            if v.get("protocol_version", 1) >= 2:
+            proto_ver = v.get("protocol_version", 1)
+            try:
+                proto_ver = int(proto_ver)
+            except (ValueError, TypeError):
+                proto_ver = 1
+            if proto_ver >= 2:
                 # Clamp and validate GPU metrics before using them
                 util = max(0, min(100, util))
                 mem = max(0, min(100, mem))
@@ -205,6 +210,11 @@ async def websocket_endpoint(ws: WebSocket, volunteer_id: str):
     model = init_msg.get("model", "unknown")
     peer_addr = ws.client.host if ws.client else "unknown"
     protocol_version = init_msg.get("protocol_version", 1)
+    # Coerce protocol_version to int for safe comparisons
+    try:
+        protocol_version = int(protocol_version)
+    except (ValueError, TypeError):
+        protocol_version = 1
     init_model_state = init_msg.get("model_state", "ready" if protocol_version == 1 else "unloaded")
 
     async with _vol_lock:

@@ -85,13 +85,19 @@ docker run -d \
     -e COORDINATOR_PORT=8080 \
     coordinator:test >/dev/null
 
-# Wait for coordinator HTTP health endpoint
+# Wait for coordinator HTTP health endpoint (absolute 30s timeout via timeout command)
+HEALTH_OK=false
 for i in $(seq 1 30); do
     if curl -sf "http://localhost:${COORDINATOR_PORT}/health" >/dev/null 2>&1; then
+        HEALTH_OK=true
         break
     fi
     sleep 1
 done
+
+if [ "${HEALTH_OK}" != true ]; then
+    fail "Coordinator health check timed out after 30s"
+fi
 
 COORDINATOR_HEALTH=$(curl -sf "http://localhost:${COORDINATOR_PORT}/health" 2>/dev/null || echo "{}")
 if ! echo "${COORDINATOR_HEALTH}" | grep -q '"status"'; then

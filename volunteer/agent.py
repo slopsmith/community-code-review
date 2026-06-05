@@ -63,7 +63,6 @@ _gpu_stats = {"utilization": 0, "memory": 0}
 _active_requests = 0
 _current_state = "unloaded"
 _state_lock = asyncio.Lock()
-_first_gpu_probe = True
 
 
 async def get_gpu_stats() -> dict:
@@ -81,14 +80,19 @@ async def get_gpu_stats() -> dict:
             line = result.stdout.strip().split("\n")[0]
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 3:
-                stats["utilization"] = int(float(parts[0]))
-                mem_used = float(parts[1])
-                mem_total = float(parts[2])
-                if mem_total > 0:
-                    stats["memory"] = int((mem_used / mem_total) * 100)
-                return stats
-    except Exception:
-        pass
+                try:
+                    stats["utilization"] = int(float(parts[0]))
+                    mem_used = float(parts[1])
+                    mem_total = float(parts[2])
+                    if mem_total > 0:
+                        stats["memory"] = int((mem_used / mem_total) * 100)
+                    return stats
+                except (ValueError, IndexError) as e:
+                    logger.warning("Unexpected nvidia-smi output format: %s", e)
+    except FileNotFoundError:
+        pass  # nvidia-smi not installed
+    except Exception as e:
+        logger.warning("nvidia-smi probe failed: %s", e)
 
     # Try AMD (rocm-smi)
     try:
@@ -97,23 +101,30 @@ async def get_gpu_stats() -> dict:
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
-            # Parse rocm-smi output (simplified)
             lines = result.stdout.strip().split("\n")
             for line in lines:
                 line_lower = line.lower()
                 if "gpu use" in line_lower:
                     parts = line.split()
-                    for i, p in enumerate(parts):
+                    for _i, p in enumerate(parts):
                         if "%" in p:
-                            stats["utilization"] = int(float(p.replace("%", "")))
+                            try:
+                                stats["utilization"] = int(float(p.replace("%", "")))
+                            except ValueError:
+                                logger.warning("Unexpected rocm-smi utilization format: %s", p)
                 if "vram" in line_lower and "%" in line:
                     parts = line.split()
                     for p in parts:
                         if "%" in p:
-                            stats["memory"] = int(float(p.replace("%", "")))
+                            try:
+                                stats["memory"] = int(float(p.replace("%", "")))
+                            except ValueError:
+                                logger.warning("Unexpected rocm-smi memory format: %s", p)
             return stats
-    except Exception:
-        pass
+    except FileNotFoundError:
+        pass  # rocm-smi not installed
+    except Exception as e:
+        logger.warning("rocm-smi probe failed: %s", e)
 
     # Try Intel (intel_gpu_top)
     try:
@@ -128,11 +139,16 @@ async def get_gpu_stats() -> dict:
                     parts = line.split()
                     for p in parts:
                         if "%" in p:
-                            stats["utilization"] = int(float(p.replace("%", "")))
+                            try:
+                                stats["utilization"] = int(float(p.replace("%", "")))
+                            except ValueError:
+                                logger.warning("Unexpected intel_gpu_top utilization format: %s", p)
                             break
             return stats
-    except Exception:
-        pass
+    except FileNotFoundError:
+        pass  # intel_gpu_top not installed
+    except Exception as e:
+        logger.warning("intel_gpu_top probe failed: %s", e)
 
     return stats
 
@@ -169,7 +185,7 @@ async def gpu_monitor_task(ws):
 async def _update_model_state(ws):
     """Update and broadcast model state based on GPU and request load.
     Must be called while holding _state_lock."""
-    global _current_state, _first_gpu_probe
+    global _current_state
     old_state = _current_state
 
     if _active_requests > 0:
@@ -177,7 +193,7 @@ async def _update_model_state(ws):
     elif _gpu_stats["utilization"] > GPU_UTIL_THRESHOLD or _gpu_stats["memory"] > GPU_MEM_THRESHOLD:
         new_state = "busy"
     else:
-        # First successful GPU probe transitions from unloaded -> loading -> ready
+        # Transition from unloaded -> loading -> ready
         if old_state == "unloaded":
             new_state = "loading"
         else:
@@ -322,7 +338,7 @@ async def handle_inference(ws, req_id: str, body: dict):
         _active_requests += 1
         await _update_model_state(ws)
 
-    logger.info("Forwarding request %s to llama-server...", req_id)
+    logger.info("[%s] Forwarding request to llama-server...", req_id)
 
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
@@ -341,10 +357,10 @@ async def handle_inference(ws, req_id: str, body: dict):
             "status": "success",
             "body": result,
         }))
-        logger.info("✅ Review complete — result sent back to coordinator")
+        logger.info("[%s] ✅ Review complete — result sent back to coordinator", req_id)
 
     except httpx.TimeoutException:
-        logger.error("Request %s timed out against llama-server", req_id)
+        logger.error("[%s] Request timed out against llama-server", req_id)
         await ws.send(json.dumps({
             "type": "inference_result",
             "id": req_id,
@@ -352,7 +368,7 @@ async def handle_inference(ws, req_id: str, body: dict):
             "error": "llama-server timed out",
         }))
     except httpx.RequestError as e:
-        logger.error("Request %s failed against llama-server: %s", req_id, e)
+        logger.error("[%s] Request failed against llama-server: %s", req_id, e)
         await ws.send(json.dumps({
             "type": "inference_result",
             "id": req_id,
@@ -360,7 +376,7 @@ async def handle_inference(ws, req_id: str, body: dict):
             "error": str(e),
         }))
     except Exception as e:
-        logger.error("Unexpected error on request %s: %s", req_id, e)
+        logger.error("[%s] Unexpected error: %s", req_id, e)
         await ws.send(json.dumps({
             "type": "inference_result",
             "id": req_id,
