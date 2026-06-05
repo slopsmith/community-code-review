@@ -8,6 +8,10 @@ on:
 
 jobs:
   code-review:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
