@@ -117,8 +117,8 @@ async def _pick_volunteer() -> Optional[tuple[str, dict]]:
             max_p = v.get("max_parallel", 1)
             active = v.get("active_requests", 0)
 
-            # Skip loading volunteers; keep unloaded for fallback
-            if state == "loading":
+            # Skip loading and unloading volunteers
+            if state == "loading" or state == "unloading":
                 continue
 
             # Skip GPU-busy volunteers (v2+ only; v1 clients bypass this)

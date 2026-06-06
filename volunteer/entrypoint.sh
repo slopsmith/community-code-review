@@ -7,10 +7,17 @@ export MODEL_FILE="${MODEL_FILE:-Qwen3-30B-A3B-Q4_K_M.gguf}"
 MODEL_URL="${MODEL_URL:-}"
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
-LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
 LLAMA_TEMP="${LLAMA_TEMP:-0.7}"
 MODEL_PATH="/models/${MODEL_FILE}"
 LLAMA_N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-}"
+
+# Track whether user explicitly set LLAMA_N_PARALLEL (skip auto-tune if so)
+_LLAMA_N_PARALLEL_WAS_SET=0
+[ -n "${LLAMA_N_PARALLEL:+x}" ] && _LLAMA_N_PARALLEL_WAS_SET=1
+LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
+
+# Export these so agent.py can read them (agent manages llama-server lifecycle)
+export LLAMA_PORT LLAMA_CTX_SIZE LLAMA_N_PARALLEL LLAMA_TEMP MODEL_PATH
 
 check_vram() {
     local info=$(curl -sf "https://huggingface.co/api/models/${MODEL_REPO}" 2>/dev/null) || return 0
@@ -35,6 +42,25 @@ print(0)
         LLAMA_N_GPU_LAYERS=$scaled
         echo "  Partial offload: ${LLAMA_N_GPU_LAYERS} GPU layers (auto-scaled)"
     fi
+
+    # Auto-tune parallel slots based on free VRAM (only if user didn't set explicitly)
+    # Each parallel 32K slot needs ~2.5GB for KV cache overhead.
+    local kv_slot_mib=2560
+    local safety_mib=1024
+    if [ "$vram_total" -gt 0 ] && [ "$model_mb" -gt 0 ] && [ "$_LLAMA_N_PARALLEL_WAS_SET" -eq 0 ]; then
+        local available=$(( vram_total - model_mb - safety_mib ))
+        if [ "$available" -ge "$(( kv_slot_mib * 2 ))" ]; then
+            local tuned=$(( available / kv_slot_mib ))
+            # Clamp: at least 1, at most 8 (llama.cpp performance cliff)
+            [ "$tuned" -lt 1 ] && tuned=1
+            [ "$tuned" -gt 8 ] && tuned=8
+            if [ "$tuned" -gt "${LLAMA_N_PARALLEL:-1}" ]; then
+                echo "  Parallel slots: $LLAMA_N_PARALLEL → $tuned (auto-tuned)"
+                LLAMA_N_PARALLEL=$tuned
+                export LLAMA_N_PARALLEL
+            fi
+        fi
+    fi
 }
 
 while true; do
@@ -53,9 +79,10 @@ while true; do
     export GPU_INFO
     echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
     check_vram || true
+    export LLAMA_N_GPU_LAYERS
 
     if [ "${MOCK_MODE:-}" = "1" ]; then
-        echo "  MOCK MODE: skipping model load, starting dummy server..."
+        echo "  MOCK MODE: skipping model download, starting dummy server..."
         python3 -c "
 import http.server, socketserver, json, threading
 
@@ -110,23 +137,23 @@ time.sleep(999999)
             cp /app/MODEL_README.md /models/README.md
         fi
 
-        echo "  Starting llama-server..."
-        ngl_arg=""
-        [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"
-        /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
-        LLAMA_PID=$!
-        ok=0
-        for i in $(seq 1 600); do
-            if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
-            sleep 1
-        done
-        if [ "$ok" -eq 0 ]; then echo "  Server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
+        echo "  NOTE: llama-server will be started on demand by agent.py"
+        echo "        when inference requests arrive and stopped when GPU"
+        echo "        is busy or idle timeout is reached."
     fi
 
     echo "  Starting agent..."
     cd /app && python3 agent.py &
     AGENT_PID=$!
-    trap "kill $LLAMA_PID $AGENT_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+    # Cleanup function kills agent and any orphaned llama-server processes
+    _cleanup() {
+        kill "$AGENT_PID" 2>/dev/null || true
+        # Kill any orphaned llama-server that the agent may have started
+        pkill -f "llama-server" 2>/dev/null || true
+        wait "$AGENT_PID" 2>/dev/null || true
+        exit 0
+    }
+    trap _cleanup SIGTERM SIGINT
     echo "  Volunteer running"
     wait -n 2>/dev/null || wait
     echo "=== Process ended, restarting in 5s ==="

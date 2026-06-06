@@ -49,7 +49,7 @@ cleanup
 
 trap cleanup EXIT
 
-# ── Step 1: Build coordinator image ───────────────────────────────────────
+# ── Step 1: Build images first ───────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Community Code Review — Integration Test                    ║"
@@ -62,13 +62,37 @@ info "Building coordinator image..."
 docker build -t coordinator:test "${PROJECT_ROOT}/coordinator" >/dev/null
 ok "Coordinator image built"
 
-# ── Step 2: Build volunteer image ─────────────────────────────────────────
 info "Building volunteer image..."
 docker build \
     --build-arg ORG_NAME=slopsmith \
     -t "${VOLUNTEER_IMAGE}" \
     "${PROJECT_ROOT}/volunteer" >/dev/null
 ok "Volunteer image built"
+
+# ── Step 2: Run unit tests for agent state machine ────────────────────────
+echo ""
+info "Running unit tests for agent state machine..."
+UNIT_TEST_RESULT=$(docker run --rm \
+    --entrypoint python3 \
+    -e COORDINATOR_URL="http://coordinator:8080" \
+    -e MOCK_MODE=1 \
+    -e GPU_UTIL_THRESHOLD=70 \
+    -e GPU_MEM_THRESHOLD=85 \
+    -e IDLE_TIMEOUT=30 \
+    -v "${PROJECT_ROOT}/tests/test_agent_state_machine.py:/app/test_agent_state_machine.py" \
+    "${VOLUNTEER_IMAGE}" \
+    -m pytest /app/test_agent_state_machine.py -v 2>&1) || true
+
+if echo "${UNIT_TEST_RESULT}" | grep -q "passed"; then
+    echo "${UNIT_TEST_RESULT}" | tail -20
+    ok "Unit tests passed"
+elif echo "${UNIT_TEST_RESULT}" | grep -q "FAILED"; then
+    echo "${UNIT_TEST_RESULT}"
+    fail "Unit tests FAILED"
+else
+    echo "${UNIT_TEST_RESULT}" | tail -30
+    fail "Unit test output ambiguous — pytest may have crashed"
+fi
 
 # ── Step 3: Create isolated Docker network ────────────────────────────────
 info "Creating test network..."
@@ -208,6 +232,57 @@ if [ "${MOCK_MODE}" = "1" ]; then
         ok "Mock response received"
     else
         fail "Expected mock response marker 'MOCK REVIEW' not found"
+    fi
+fi
+
+# ── Step 9b: Verify state transitions after inference ────────────────────
+if [ "${STRICT_MODE}" = "1" ]; then
+    info "Checking model state transitions after inference..."
+
+    # Poll for stable state (ready or unloaded) with timeout
+    info "Waiting for model state to stabilize..."
+    STATE_STABLE=false
+    for i in $(seq 1 15); do
+        sleep 1
+        VOLUNTEERS=$(curl -sf "http://localhost:${COORDINATOR_PORT}/volunteers" 2>/dev/null || echo "[]")
+        CURRENT_STATE=$(echo "${VOLUNTEERS}" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for v in data:
+    if v.get('id') == 'test-volunteer':
+        print(v.get('model_state', 'MISSING'))
+        sys.exit(0)
+print('MISSING')
+" 2>/dev/null || echo "MISSING")
+        if [ "${CURRENT_STATE}" = "ready" ] || [ "${CURRENT_STATE}" = "unloaded" ]; then
+            STATE_STABLE=true
+            break
+        fi
+    done
+
+    if [ "${STATE_STABLE}" != true ]; then
+        warn "Model state did not stabilize within 15s (last seen: ${CURRENT_STATE})"
+    fi
+
+    AFTER_STATE="${CURRENT_STATE}"
+    if [ "${AFTER_STATE}" = "ready" ]; then
+        ok "Model state is 'ready' after inference (loaded, idle)"
+    elif [ "${AFTER_STATE}" = "unloaded" ]; then
+        ok "Model state is 'unloaded' after inference (unloaded due to idle timeout or GPU)"
+    else
+        warn "Unexpected model state after inference: ${AFTER_STATE} (expected 'ready' or 'unloaded')"
+    fi
+
+    # Verify the volunteer went through proper state changes by checking agent logs
+    info "Checking agent logs for state transitions..."
+    AGENT_LOGS=$(docker logs "${VOLUNTEER_NAME}" 2>&1 | grep "Model state:" | tail -10 || echo "")
+    if echo "${AGENT_LOGS}" | grep -qE "(→ loading|→ ready|→ busy|→ unloaded)"; then
+        ok "State transitions detected in agent logs"
+        echo "${AGENT_LOGS}" | while IFS= read -r line; do
+            echo "       ${line}"
+        done
+    else
+        warn "No state transitions found in agent logs"
     fi
 fi
 
