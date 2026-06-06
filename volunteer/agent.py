@@ -516,64 +516,100 @@ async def connect_and_serve():
     except Exception as e:
         logger.warning("Could not probe GPU before init: %s", e)
 
-    async with websockets.connect(WS_URL, ping_interval=None) as ws:
-        # ── Step 1: Send init message with GPU metadata ──────────────────
-        init_msg = {
-            "type": "init",
-            "protocol_version": PROTOCOL_VERSION,
-            "gpu_info": GPU_INFO,
-            "model": MODEL_FILE,
-            "model_state": _current_state,
-        }
-        await ws.send(json.dumps(init_msg))
-        logger.info("Sent init message to coordinator (protocol v%d, state=%s)", PROTOCOL_VERSION, _current_state)
+    # Try to connect with a timeout - if coordinator is not available, skip
+    ws = None
+    try:
+        async with websockets.connect(WS_URL, ping_interval=None, open_timeout=5) as ws:
+            # ── Step 1: Send init message with GPU metadata ──────────────────
+            init_msg = {
+                "type": "init",
+                "protocol_version": PROTOCOL_VERSION,
+                "gpu_info": GPU_INFO,
+                "model": MODEL_FILE,
+                "model_state": _current_state,
+            }
+            await ws.send(json.dumps(init_msg))
+            logger.info("Sent init message to coordinator (protocol v%d, state=%s)", PROTOCOL_VERSION, _current_state)
 
-        # ── Step 2: Start background tasks ───────────────────────────────
-        heartbeat_task = asyncio.create_task(send_heartbeats(ws))
-        gpu_task = asyncio.create_task(gpu_monitor_task(ws))
-        idle_task = asyncio.create_task(idle_timeout_task(ws))
+            # ── Step 2: Start background tasks ───────────────────────────────
+            heartbeat_task = asyncio.create_task(send_heartbeats(ws))
+            gpu_task = asyncio.create_task(gpu_monitor_task(ws))
+            idle_task = asyncio.create_task(idle_timeout_task(ws))
 
-        try:
-            # ── Step 3: Message loop ────────────────────────────────────
-            async for raw in ws:
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    logger.warning("Invalid JSON from coordinator: %s", raw[:200])
-                    continue
+            try:
+                # ── Step 3: Message loop ────────────────────────────────────
+                async for raw in ws:
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning("Invalid JSON from coordinator: %s", raw[:200])
+                        continue
 
-                msg_type = data.get("type")
+                    msg_type = data.get("type")
 
-                if msg_type == "inference":
-                    req_id = data.get("id")
-                    body = data.get("body", {})
-                    logger.info(
-                        "📥 Received a code review request — running inference..."
-                    )
-                    # Fire and forget — handle concurrently
-                    asyncio.create_task(
-                        handle_inference(ws, req_id, body)
-                    )
+                    if msg_type == "inference":
+                        req_id = data.get("id")
+                        body = data.get("body", {})
+                        logger.info(
+                            "📥 Received a code review request — running inference..."
+                        )
+                        # Fire and forget — handle concurrently
+                        asyncio.create_task(
+                            handle_inference(ws, req_id, body)
+                        )
 
-                elif msg_type == "ping":
-                    await ws.send(json.dumps({"type": "pong"}))
+                    elif msg_type == "ping":
+                        await ws.send(json.dumps({"type": "pong"}))
 
-                elif msg_type == "server_notice":
-                    level = data.get("level", "info")
-                    message = data.get("message", "")
-                    if level == "warning":
-                        logger.warning("📢 Coordinator says: %s", message)
-                    elif level == "error":
-                        logger.error("📢 Coordinator says: %s", message)
+                    elif msg_type == "server_notice":
+                        level = data.get("level", "info")
+                        message = data.get("message", "")
+                        if level == "warning":
+                            logger.warning("📢 Coordinator says: %s", message)
+                        elif level == "error":
+                            logger.error("📢 Coordinator says: %s", message)
+                        else:
+                            logger.info("📢 Coordinator says: %s", message)
+
                     else:
-                        logger.info("📢 Coordinator says: %s", message)
+                        logger.debug("Ignoring message type: %s", msg_type)
 
-                else:
-                    logger.debug("Ignoring message type: %s", msg_type)
-
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("WebSocket closed by coordinator")
-        finally:
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("WebSocket closed by coordinator")
+            except websockets.exceptions.WebSocketException as e:
+                logger.warning("WebSocket connection failed: %s — running in offline mode", e)
+                # Continue running in offline mode, just don't send state updates
+            except Exception as e:
+                logger.warning("Unexpected WebSocket error: %s — running in offline mode", e)
+                # Continue running in offline mode, just don't send state updates
+            finally:
+                heartbeat_task.cancel()
+                gpu_task.cancel()
+                idle_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await gpu_task
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await idle_task
+                except asyncio.CancelledError:
+                    pass
+    except websockets.exceptions.WebSocketException as e:
+        logger.warning("WebSocket connection failed: %s — running in offline mode", e)
+        # Continue running in offline mode, just don't send state updates
+    except Exception as e:
+        logger.warning("Unexpected WebSocket error: %s — running in offline mode", e)
+        # Continue running in offline mode, just don't send state updates
+        # Continue running in offline mode, just don't send state updates
+    except Exception as e:
+        logger.warning("Unexpected WebSocket error: %s — running in offline mode", e)
+        # Continue running in offline mode, just don't send state updates
+    finally:
+        if ws:
             heartbeat_task.cancel()
             gpu_task.cancel()
             idle_task.cancel()
@@ -589,8 +625,6 @@ async def connect_and_serve():
                 await idle_task
             except asyncio.CancelledError:
                 pass
-
-
 async def send_heartbeats(ws):
     """Send a heartbeat every 30 seconds."""
     while True:
