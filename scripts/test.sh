@@ -73,6 +73,7 @@ ok "Volunteer image built"
 echo ""
 info "Running unit tests for agent state machine..."
 UNIT_TEST_RESULT=$(docker run --rm \
+    --entrypoint python3 \
     -e COORDINATOR_URL="http://coordinator:8080" \
     -e MOCK_MODE=1 \
     -e GPU_UTIL_THRESHOLD=70 \
@@ -80,7 +81,7 @@ UNIT_TEST_RESULT=$(docker run --rm \
     -e IDLE_TIMEOUT=30 \
     -v "${PROJECT_ROOT}/tests/test_agent_state_machine.py:/app/test_agent_state_machine.py" \
     "${VOLUNTEER_IMAGE}" \
-    python3 -m pytest /app/test_agent_state_machine.py -v 2>&1) || true
+    -m pytest /app/test_agent_state_machine.py -v 2>&1) || true
 
 if echo "${UNIT_TEST_RESULT}" | grep -q "passed"; then
     echo "${UNIT_TEST_RESULT}" | tail -20
