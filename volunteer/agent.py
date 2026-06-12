@@ -537,6 +537,8 @@ async def connect_and_serve():
             gpu_task = asyncio.create_task(gpu_monitor_task(ws))
             idle_task = asyncio.create_task(idle_timeout_task(ws))
 
+            logger.info("✅ Connected and awaiting inference jobs...")
+
             try:
                 # ── Step 3: Message loop ────────────────────────────────────
                 async for raw in ws:
